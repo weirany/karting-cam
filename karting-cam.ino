@@ -8,6 +8,7 @@
  *                      http://<board-ip>/f?name=<filename>  (downloads)
  ********************************************************************/
 
+#include "config.h"
 #include <Arduino.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -15,17 +16,6 @@
 #include <SD_MMC.h>
 #include <WiFi.h>
 #include <esp_camera.h>
-
-/* ------------------------------ Wi-Fi ------------------------------ */
-#define USE_SOFT_AP 1 // 1 = self-hosted AP, 0 = connect to router
-
-#if USE_SOFT_AP
-static const char *AP_SSID = "KartCam"; // ≥ 8 chars
-static const char *AP_PASS = "p@ssword";
-#else
-static const char *STA_SSID = "YourHomeWiFi";
-static const char *STA_PASS = "YourPassword";
-#endif
 
 /* ---------------------- Camera pin assignment ---------------------- */
 /*  These match the WROOM-32E + OV2640 wiring you posted.              */
