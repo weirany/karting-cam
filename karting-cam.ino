@@ -16,6 +16,7 @@
 #include <SD_MMC.h>
 #include <WiFi.h>
 #include <esp_camera.h>
+#include "log_util.h"
 
 /* ---------------------- Camera pin assignment ---------------------- */
 /*  These match the WROOM-32E + OV2640 wiring you posted.              */
@@ -44,18 +45,18 @@ static uint32_t frameCounter = 0;
 static void startWiFi() {
 #if USE_SOFT_AP
   WiFi.softAP(AP_SSID, AP_PASS);
-  Serial.printf("[WiFi] Soft-AP started  SSID:%s  IP:%s\n", AP_SSID,
-                WiFi.softAPIP().toString().c_str());
+  LOG_PRINTF("[WiFi] Soft-AP started  SSID:%s  IP:%s\n", AP_SSID,
+             WiFi.softAPIP().toString().c_str());
 #else
   WiFi.mode(WIFI_STA);
   WiFi.begin(STA_SSID, STA_PASS);
-  Serial.printf("[WiFi] Connecting to %s", STA_SSID);
+  LOG_PRINTF("[WiFi] Connecting to %s", STA_SSID);
   while (WiFi.status() != WL_CONNECTED) {
     delay(250);
-    Serial.print('.');
+    LOG_PRINTF(".");
   }
-  Serial.printf("\n[WiFi] Connected  IP:%s  RSSI:%ddBm\n",
-                WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  LOG_PRINTF("\n[WiFi] Connected  IP:%s  RSSI:%ddBm\n",
+             WiFi.localIP().toString().c_str(), WiFi.RSSI());
 #endif
 }
 
@@ -90,7 +91,7 @@ static bool initCamera() {
 
   esp_err_t err = esp_camera_init(&cfg);
   if (err != ESP_OK) {
-    Serial.printf("Camera init failed: 0x%04x\n", err);
+    LOG_PRINTF("Camera init failed: 0x%04x\n", err);
     return false;
   }
   return true;
@@ -133,28 +134,29 @@ static void startWebServer() {
   });
 
   server.begin();
-  Serial.println("[HTTP] Server started");
+  LOG_PRINTLN("[HTTP] Server started");
 }
 
 /* ------------------------------ setup() ---------------------------- */
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== ESP32 Karting-Cam boot ===");
+  LOG_PRINTLN("\n=== ESP32 Karting-Cam boot ===");
 
   if (!initCamera()) {
-    Serial.println("Fatal camera error — halting.");
+    LOG_PRINTLN("Fatal camera error — halting.");
     while (true)
       delay(1000);
   }
 
   /* Mount SD-MMC in 4-bit mode, /sd is implicit */
   if (!SD_MMC.begin("/sd", true)) { // true = 4-bit
-    Serial.println("SD_MMC mount failed — halting.");
+    LOG_PRINTLN("SD_MMC mount failed — halting.");
     while (true)
       delay(1000);
   }
   uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
-  Serial.printf("SD card OK — %llu MB\n", cardSize);
+  LOG_PRINTF("SD card OK — %llu MB\n", cardSize);
+  logInit();
 
   startWiFi();
   startWebServer();
@@ -165,7 +167,7 @@ void loop() {
   /* Capture one frame every minute */
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
-    Serial.println("Camera capture failed");
+    LOG_PRINTLN("Camera capture failed");
     delay(5000);
     return;
   }
@@ -176,9 +178,9 @@ void loop() {
   if (img) {
     img.write(fb->buf, fb->len);
     img.close();
-    Serial.printf("Saved %s (%u bytes)\n", path, fb->len);
+    LOG_PRINTF("Saved %s (%u bytes)\n", path, fb->len);
   } else {
-    Serial.printf("File open failed for %s\n", path);
+    LOG_PRINTF("File open failed for %s\n", path);
   }
   esp_camera_fb_return(fb);
 
