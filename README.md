@@ -1,6 +1,7 @@
 # Karting-Cam ESP32 Project
 
-ESP32-CAM project that captures JPEG images and serves them via a web interface.
+ESP32-CAM project that records a short MJPEG video and serves files via a web
+interface.
 
 ## Setup
 
@@ -25,7 +26,7 @@ Upload the `karting-cam.ino` file to your ESP32-CAM using the Arduino IDE or Pla
 
 ## Features
 
-- Captures JPEG images every minute
-- Stores images on SD card
-- Web interface to view and download images
+- Records a 10&nbsp;second MJPEG video on boot
+- Stores the video on the SD card
+- Web interface to view and download files
 - Can operate as WiFi Access Point or connect to existing network

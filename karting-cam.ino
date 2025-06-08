@@ -38,7 +38,7 @@
 /* ------------------------------------------------------------------- */
 
 AsyncWebServer server(80);
-static uint32_t frameCounter = 0;
+static bool videoRecorded = false;
 
 /* ------------------ Helper: start / join Wi-Fi --------------------- */
 static void startWiFi() {
@@ -162,25 +162,31 @@ void setup() {
 
 /* ------------------------------ loop() ----------------------------- */
 void loop() {
-  /* Capture one frame every minute */
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    delay(5000);
+  if (videoRecorded) {
+    delay(1000);
     return;
   }
 
-  char path[32];
-  sprintf(path, "/cap%05u.jpg", frameCounter++);
-  File img = SD_MMC.open(path, FILE_WRITE);
-  if (img) {
-    img.write(fb->buf, fb->len);
-    img.close();
-    Serial.printf("Saved %s (%u bytes)\n", path, fb->len);
-  } else {
-    Serial.printf("File open failed for %s\n", path);
+  File vid = SD_MMC.open("/video.mjpeg", FILE_WRITE);
+  if (!vid) {
+    Serial.println("Video file open failed");
+    videoRecorded = true;
+    return;
   }
-  esp_camera_fb_return(fb);
 
-  delay(60 * 1000);
+  Serial.println("[Video] Recording 10 seconds …");
+  uint32_t start = millis();
+  while (millis() - start < 10 * 1000) {
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+      Serial.println("Camera capture failed");
+      break;
+    }
+    vid.write(fb->buf, fb->len);
+    esp_camera_fb_return(fb);
+    delay(100); // ~10 FPS
+  }
+  vid.close();
+  Serial.println("[Video] Saved /video.mjpeg");
+  videoRecorded = true;
 }
