@@ -129,7 +129,18 @@ static void startWebServer() {
       req->send(404, "text/plain", "File not found");
       return;
     }
-    req->send(file, fname, "image/jpeg");
+
+    // Determine MIME type based on file extension
+    String mimeType = "application/octet-stream"; // default
+    if (fname.endsWith(".jpg") || fname.endsWith(".jpeg")) {
+      mimeType = "image/jpeg";
+    } else if (fname.endsWith(".mjpeg") || fname.endsWith(".mjpg")) {
+      mimeType = "video/x-motion-jpeg";
+    } else if (fname.endsWith(".txt") || fname.endsWith(".log")) {
+      mimeType = "text/plain";
+    }
+
+    req->send(file, fname, mimeType);
     /* AsyncWebServer closes the File automatically after streaming */
   });
 
