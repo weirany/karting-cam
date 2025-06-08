@@ -1,9 +1,14 @@
-#include <Arduino.h>
-#include <FS.h>
-#include <SD_MMC.h>
-#include <esp_camera.h>
+/**
+ *  ESP32-WROOM-32E  + “ESP32 Camera Extension”
+ *  SD-MMC   ↔   camera coexistence demo
+ *  Core  = Arduino-ESP32 v2.0.11 (or newer)
+ *  Board = “ESP32 Dev Module” (NOT “ESP32-CAM”)
+ */
 
-/* ---------- Camera pin map ---------- */
+#include "SD_MMC.h"
+#include "esp_camera.h"
+
+/* ---------- Camera pin map (your FFC table) ---------- */
 #define CAM_PIN_PWDN 32  // PWDN
 #define CAM_PIN_RESET -1 // hard-wired
 #define CAM_PIN_XCLK 0   // XCLK
@@ -21,7 +26,7 @@
 #define CAM_PIN_HREF 23
 #define CAM_PIN_PCLK 22
 
-/* ---------- SD-MMC pin map ------ */
+/* ---------- SD-MMC pin map (your micro-SD table) ------ */
 #define SD_PIN_CLK 14
 #define SD_PIN_CMD 15
 #define SD_PIN_D0 2
@@ -29,26 +34,12 @@
 #define SD_PIN_D2 12
 #define SD_PIN_D3 13
 
+/* ------------------------------------------------------ */
 void setup() {
   Serial.begin(115200);
-  Serial.println("Starting...");
-  while (!Serial)
-    ; // USB-serial sync
+  Serial.println("\n=== ESP32 SD-MMC + Camera test ===");
 
-  /* ---- PSRAM check ----------------------------------- */
-  bool hasPsram = psramFound();
-  Serial.printf("PSRAM found: %s\n", hasPsram ? "true" : "false");
-  if (!hasPsram) {
-    Serial.println("ERROR: No PSRAM detected!");
-    Serial.println("WARNING: PSRAM is required for decent video recording.");
-    Serial.println(
-        "Without PSRAM, the ESP32 cannot handle video capture properly.");
-    Serial.println("Please use an ESP32 board with PSRAM.");
-    Serial.println("System Sleeping...");
-    esp_deep_sleep(10 * 1'000'000);
-  }
-
-  /* ---- Camera init ----------------------------------- */
+  /* ---- Camera init (comment section out if not needed) */
   camera_config_t cam;
   cam.ledc_channel = LEDC_CHANNEL_0;
   cam.ledc_timer = LEDC_TIMER_0;
@@ -76,28 +67,33 @@ void setup() {
 
   if (esp_camera_init(&cam) == ESP_OK)
     Serial.println("Camera initialised ✔");
-  else {
+  else
     Serial.println("Camera initialisation FAILED ✖");
-    Serial.println("System Sleeping...");
-    esp_deep_sleep(10 * 1'000'000);
-  }
 
   /* ---- SD-MMC init ----------------------------------- */
-
   SD_MMC.setPins(SD_PIN_CLK, SD_PIN_CMD, SD_PIN_D0, SD_PIN_D1, SD_PIN_D2,
                  SD_PIN_D3);
 
   bool sd_ok = SD_MMC.begin("/sdcard", /*1-bit?*/ false);
+  // if (!sd_ok) {
+  //   Serial.println("1-bit mount failed → trying 4-bit …");
+  //   sd_ok = SD_MMC.begin("/sdcard", /*1-bit*/false);
+  // }
+
   if (!sd_ok) {
-    Serial.println("SD mount FAILED – check SD card");
-    Serial.println("System Sleeping...");
-    esp_deep_sleep(10 * 1'000'000);
+    Serial.println("SD mount FAILED – check wiring / pull-ups / format");
+    return;
   }
   Serial.println("SD mounted 🎉");
   Serial.printf("Card type : %u\n", SD_MMC.cardType());
   Serial.printf("Card size : %llu MB\n", SD_MMC.cardSize() >> 20);
 
-  Serial.println("Setup done\n");
+  /* quick R/W sanity check */
+  File f = SD_MMC.open("/test.txt", FILE_WRITE);
+  if (f) {
+    f.println("Hello SD-MMC!");
+    f.close();
+  }
 }
 
 void loop() {
