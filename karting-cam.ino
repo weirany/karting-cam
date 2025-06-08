@@ -9,6 +9,7 @@
  ********************************************************************/
 
 #include "config.h"
+#include "log_util.h"
 #include <Arduino.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -44,18 +45,18 @@ static bool videoRecorded = false;
 static void startWiFi() {
 #if USE_SOFT_AP
   WiFi.softAP(AP_SSID, AP_PASS);
-  Serial.printf("[WiFi] Soft-AP started  SSID:%s  IP:%s\n", AP_SSID,
-                WiFi.softAPIP().toString().c_str());
+  LOG_PRINTF("[WiFi] Soft-AP started  SSID:%s  IP:%s\n", AP_SSID,
+             WiFi.softAPIP().toString().c_str());
 #else
   WiFi.mode(WIFI_STA);
   WiFi.begin(STA_SSID, STA_PASS);
-  Serial.printf("[WiFi] Connecting to %s", STA_SSID);
+  LOG_PRINTF("[WiFi] Connecting to %s", STA_SSID);
   while (WiFi.status() != WL_CONNECTED) {
     delay(250);
-    Serial.print('.');
+    LOG_PRINTF(".");
   }
-  Serial.printf("\n[WiFi] Connected  IP:%s  RSSI:%ddBm\n",
-                WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  LOG_PRINTF("\n[WiFi] Connected  IP:%s  RSSI:%ddBm\n",
+             WiFi.localIP().toString().c_str(), WiFi.RSSI());
 #endif
 }
 
@@ -90,7 +91,7 @@ static bool initCamera() {
 
   esp_err_t err = esp_camera_init(&cfg);
   if (err != ESP_OK) {
-    Serial.printf("Camera init failed: 0x%04x\n", err);
+    LOG_PRINTF("Camera init failed: 0x%04x\n", err);
     return false;
   }
   return true;
@@ -133,28 +134,29 @@ static void startWebServer() {
   });
 
   server.begin();
-  Serial.println("[HTTP] Server started");
+  LOG_PRINTLN("[HTTP] Server started");
 }
 
 /* ------------------------------ setup() ---------------------------- */
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== ESP32 Karting-Cam boot ===");
+  LOG_PRINTLN("\n=== ESP32 Karting-Cam boot ===");
 
   if (!initCamera()) {
-    Serial.println("Fatal camera error — halting.");
+    LOG_PRINTLN("Fatal camera error — halting.");
     while (true)
       delay(1000);
   }
 
   /* Mount SD-MMC in 4-bit mode, /sd is implicit */
   if (!SD_MMC.begin("/sd", true)) { // true = 4-bit
-    Serial.println("SD_MMC mount failed — halting.");
+    LOG_PRINTLN("SD_MMC mount failed — halting.");
     while (true)
       delay(1000);
   }
   uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
-  Serial.printf("SD card OK — %llu MB\n", cardSize);
+  LOG_PRINTF("SD card OK — %llu MB\n", cardSize);
+  logInit();
 
   startWiFi();
   startWebServer();
@@ -169,17 +171,17 @@ void loop() {
 
   File vid = SD_MMC.open("/video.mjpeg", FILE_WRITE);
   if (!vid) {
-    Serial.println("Video file open failed");
+    LOG_PRINTLN("Video file open failed");
     videoRecorded = true;
     return;
   }
 
-  Serial.println("[Video] Recording 10 seconds …");
+  LOG_PRINTLN("[Video] Recording 10 seconds …");
   uint32_t start = millis();
   while (millis() - start < 10 * 1000) {
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
-      Serial.println("Camera capture failed");
+      LOG_PRINTLN("Camera capture failed");
       break;
     }
     vid.write(fb->buf, fb->len);
@@ -187,6 +189,6 @@ void loop() {
     delay(100); // ~10 FPS
   }
   vid.close();
-  Serial.println("[Video] Saved /video.mjpeg");
+  LOG_PRINTLN("[Video] Saved /video.mjpeg");
   videoRecorded = true;
 }
