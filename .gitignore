@@ -1,0 +1,17 @@
+# Configuration file with sensitive credentials
+config.h
+
+# Arduino/ESP32 build artifacts
+*.bin
+*.elf
+*.map
+build/
+.pio/
+
+# IDE files
+.vscode/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db 

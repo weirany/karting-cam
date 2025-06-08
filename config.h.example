@@ -1,0 +1,15 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+/* ------------------------------ Wi-Fi ------------------------------ */
+#define USE_SOFT_AP 0 // 1 = self-hosted AP, 0 = connect to router
+
+#if USE_SOFT_AP
+static const char *AP_SSID = "KartCam"; // ≥ 8 chars
+static const char *AP_PASS = "p@ssword";
+#else
+static const char *STA_SSID = "YOUR_WIFI_SSID_HERE";
+static const char *STA_PASS = "YOUR_WIFI_PASSWORD_HERE";
+#endif
+
+#endif // CONFIG_H 

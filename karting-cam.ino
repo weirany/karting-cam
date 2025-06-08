@@ -1,14 +1,29 @@
+/********************************************************************
+ *  Karting-Cam — ESP32-CAM + SD-MMC + Soft-AP HTTP file server
+ *  -------------------------------------------------------------
+ *  ‣ Captures a JPEG every min and stores it on the micro-SD card
+ *  ‣ Creates its own Wi-Fi network  (SSID: KartCam, PW: p@ssword)
+ *      OR join your home Wi-Fi by flipping USE_SOFT_AP to 0
+ *  ‣ Tiny web UI   →  http://<board-ip>/        (lists files)
+ *                      http://<board-ip>/f?name=<filename>  (downloads)
+ ********************************************************************/
+
+#include "config.h"
 #include <Arduino.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 #include <FS.h>
 #include <SD_MMC.h>
+#include <WiFi.h>
 #include <esp_camera.h>
 
-/* ---------- Camera pin map ---------- */
+/* ---------------------- Camera pin assignment ---------------------- */
+/*  These match the WROOM-32E + OV2640 wiring you posted.              */
 #define CAM_PIN_PWDN 32  // PWDN
-#define CAM_PIN_RESET -1 // hard-wired
+#define CAM_PIN_RESET -1 // (tied to EN)
 #define CAM_PIN_XCLK 0   // XCLK
-#define CAM_PIN_SIOD 26  // SIO_D
-#define CAM_PIN_SIOC 27  // SIO_C
+#define CAM_PIN_SIOD 26  // SDA (SIO_D)
+#define CAM_PIN_SIOC 27  // SCL (SIO_C)
 #define CAM_PIN_Y9 35
 #define CAM_PIN_Y8 34
 #define CAM_PIN_Y7 39
@@ -20,97 +35,143 @@
 #define CAM_PIN_VSYNC 25
 #define CAM_PIN_HREF 23
 #define CAM_PIN_PCLK 22
+/* ------------------------------------------------------------------- */
 
-/* ---------- SD-MMC pin map ------ */
-#define SD_PIN_CLK 14
-#define SD_PIN_CMD 15
-#define SD_PIN_D0 2
-#define SD_PIN_D1 4
-#define SD_PIN_D2 12
-#define SD_PIN_D3 13
+AsyncWebServer server(80);
+static uint32_t frameCounter = 0;
 
-void setup() {
-  Serial.begin(115200);
-  Serial.println("Starting...");
-  while (!Serial)
-    ; // USB-serial sync
-
-  /* ---- PSRAM check ----------------------------------- */
-  bool hasPsram = psramFound();
-  Serial.printf("PSRAM found: %s\n", hasPsram ? "true" : "false");
-  if (!hasPsram) {
-    Serial.println("ERROR: No PSRAM detected!");
-    Serial.println("WARNING: PSRAM is required for decent video recording.");
-    Serial.println(
-        "Without PSRAM, the ESP32 cannot handle video capture properly.");
-    Serial.println("Please use an ESP32 board with PSRAM.");
-    Serial.println("System Sleeping...");
-    esp_deep_sleep(10 * 1'000'000);
+/* ------------------ Helper: start / join Wi-Fi --------------------- */
+static void startWiFi() {
+#if USE_SOFT_AP
+  WiFi.softAP(AP_SSID, AP_PASS);
+  Serial.printf("[WiFi] Soft-AP started  SSID:%s  IP:%s\n", AP_SSID,
+                WiFi.softAPIP().toString().c_str());
+#else
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(STA_SSID, STA_PASS);
+  Serial.printf("[WiFi] Connecting to %s", STA_SSID);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(250);
+    Serial.print('.');
   }
-
-  /* ---- Camera init ----------------------------------- */
-  camera_config_t cam;
-  cam.ledc_channel = LEDC_CHANNEL_0;
-  cam.ledc_timer = LEDC_TIMER_0;
-  cam.pin_d0 = CAM_PIN_Y2;
-  cam.pin_d1 = CAM_PIN_Y3;
-  cam.pin_d2 = CAM_PIN_Y4;
-  cam.pin_d3 = CAM_PIN_Y5;
-  cam.pin_d4 = CAM_PIN_Y6;
-  cam.pin_d5 = CAM_PIN_Y7;
-  cam.pin_d6 = CAM_PIN_Y8;
-  cam.pin_d7 = CAM_PIN_Y9;
-  cam.pin_xclk = CAM_PIN_XCLK;
-  cam.pin_pclk = CAM_PIN_PCLK;
-  cam.pin_vsync = CAM_PIN_VSYNC;
-  cam.pin_href = CAM_PIN_HREF;
-  cam.pin_sccb_sda = CAM_PIN_SIOD;
-  cam.pin_sccb_scl = CAM_PIN_SIOC;
-  cam.pin_pwdn = CAM_PIN_PWDN;
-  cam.pin_reset = CAM_PIN_RESET;
-  cam.xclk_freq_hz = 20'000'000;
-  cam.pixel_format = PIXFORMAT_JPEG;
-  cam.frame_size = FRAMESIZE_VGA;
-  cam.jpeg_quality = 12;
-  cam.fb_count = 2;
-
-  if (esp_camera_init(&cam) == ESP_OK)
-    Serial.println("Camera initialised ✔");
-  else {
-    Serial.println("Camera initialisation FAILED ✖");
-    Serial.println("System Sleeping...");
-    esp_deep_sleep(10 * 1'000'000);
-  }
-
-  /* ---- SD-MMC init ----------------------------------- */
-
-  SD_MMC.setPins(SD_PIN_CLK, SD_PIN_CMD, SD_PIN_D0, SD_PIN_D1, SD_PIN_D2,
-                 SD_PIN_D3);
-
-  bool sd_ok = SD_MMC.begin("/sdcard", /*1-bit?*/ false);
-  if (!sd_ok) {
-    Serial.println("SD mount FAILED – check SD card");
-    Serial.println("System Sleeping...");
-    esp_deep_sleep(10 * 1'000'000);
-  }
-  Serial.println("SD mounted 🎉");
-  Serial.printf("Card type : %u\n", SD_MMC.cardType());
-  Serial.printf("Card size : %llu MB\n", SD_MMC.cardSize() >> 20);
-
-  Serial.println("Setup done\n");
+  Serial.printf("\n[WiFi] Connected  IP:%s  RSSI:%ddBm\n",
+                WiFi.localIP().toString().c_str(), WiFi.RSSI());
+#endif
 }
 
+/* ------------------ Helper: configure the camera ------------------- */
+static bool initCamera() {
+  camera_config_t cfg;
+  cfg.ledc_channel = LEDC_CHANNEL_0;
+  cfg.ledc_timer = LEDC_TIMER_0;
+  cfg.pin_d0 = CAM_PIN_Y2;
+  cfg.pin_d1 = CAM_PIN_Y3;
+  cfg.pin_d2 = CAM_PIN_Y4;
+  cfg.pin_d3 = CAM_PIN_Y5;
+  cfg.pin_d4 = CAM_PIN_Y6;
+  cfg.pin_d5 = CAM_PIN_Y7;
+  cfg.pin_d6 = CAM_PIN_Y8;
+  cfg.pin_d7 = CAM_PIN_Y9;
+  cfg.pin_xclk = CAM_PIN_XCLK;
+  cfg.pin_pclk = CAM_PIN_PCLK;
+  cfg.pin_vsync = CAM_PIN_VSYNC;
+  cfg.pin_href = CAM_PIN_HREF;
+  cfg.pin_sscb_sda = CAM_PIN_SIOD;
+  cfg.pin_sscb_scl = CAM_PIN_SIOC;
+  cfg.pin_pwdn = CAM_PIN_PWDN;
+  cfg.pin_reset = CAM_PIN_RESET;
+  cfg.xclk_freq_hz = 20'000'000;
+  cfg.pixel_format = PIXFORMAT_JPEG;
+
+  // For stills a full 1600×1200 (UXGA) is handy.
+  cfg.frame_size = FRAMESIZE_UXGA;
+  cfg.jpeg_quality = 12; // 10-12 gives ~200 kB images
+  cfg.fb_count = 1;      // single frame buffer
+
+  esp_err_t err = esp_camera_init(&cfg);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%04x\n", err);
+    return false;
+  }
+  return true;
+}
+
+/* ------------- HTTP handlers: list root + stream file -------------- */
+static void startWebServer() {
+  /* / -> HTML directory listing  */
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
+    String html = "<h2>Captured JPEGs</h2><ul>";
+    File dir = SD_MMC.open("/");
+    while (File f = dir.openNextFile()) {
+      if (!f.isDirectory()) {
+        String name = String(f.name());
+        html += "<li><a href=\"/f?name=" + name + "\">";
+        html += name + " (" + String(f.size()) + " B)</a></li>";
+      }
+      f.close();
+    }
+    html += "</ul>";
+    req->send(200, "text/html", html);
+  });
+
+  /* /f?name=cap00042.jpg -> raw JPEG stream  */
+  server.on("/f", HTTP_GET, [](AsyncWebServerRequest *req) {
+    if (!req->hasParam("name")) {
+      req->send(400, "text/plain", "Missing ?name=");
+      return;
+    }
+    String fname = req->getParam("name")->value();
+    if (!fname.startsWith("/"))
+      fname = "/" + fname;
+    File file = SD_MMC.open(fname, FILE_READ);
+    if (!file) {
+      req->send(404, "text/plain", "File not found");
+      return;
+    }
+    req->send(file, fname, "image/jpeg");
+    /* AsyncWebServer closes the File automatically after streaming */
+  });
+
+  server.begin();
+  Serial.println("[HTTP] Server started");
+}
+
+/* ------------------------------ setup() ---------------------------- */
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\n=== ESP32 Karting-Cam boot ===");
+
+  if (!initCamera()) {
+    Serial.println("Fatal camera error — halting.");
+    while (true)
+      delay(1000);
+  }
+
+  /* Mount SD-MMC in 4-bit mode, /sd is implicit */
+  if (!SD_MMC.begin("/sd", true)) { // true = 4-bit
+    Serial.println("SD_MMC mount failed — halting.");
+    while (true)
+      delay(1000);
+  }
+  uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
+  Serial.printf("SD card OK — %llu MB\n", cardSize);
+
+  startWiFi();
+  startWebServer();
+}
+
+/* ------------------------------ loop() ----------------------------- */
 void loop() {
-  /* capture & save a JPEG every 5 s */
+  /* Capture one frame every minute */
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
     Serial.println("Camera capture failed");
+    delay(5000);
     return;
   }
 
-  static uint32_t frame = 0;
   char path[32];
-  sprintf(path, "/cap%05u.jpg", frame++);
+  sprintf(path, "/cap%05u.jpg", frameCounter++);
   File img = SD_MMC.open(path, FILE_WRITE);
   if (img) {
     img.write(fb->buf, fb->len);
@@ -120,5 +181,6 @@ void loop() {
     Serial.printf("File open failed for %s\n", path);
   }
   esp_camera_fb_return(fb);
-  delay(5000);
+
+  delay(60 * 1000);
 }
