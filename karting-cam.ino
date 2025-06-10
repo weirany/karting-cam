@@ -1,11 +1,12 @@
 /********************************************************************
  *  Karting-Cam — ESP32-CAM + SD-MMC + Soft-AP HTTP file server
  *  -------------------------------------------------------------
- *  ‣ Captures a JPEG every min and stores it on the micro-SD card
+ *  ‣ Captures 5 seconds of video as individual JPEG frames on boot
  *  ‣ Creates its own Wi-Fi network  (SSID: KartCam, PW: p@ssword)
  *      OR join your home Wi-Fi by flipping USE_SOFT_AP to 0
  *  ‣ Tiny web UI   →  http://<board-ip>/        (lists files)
  *                      http://<board-ip>/f?name=<filename>  (downloads)
+ *  ‣ Saves frames as frame_000001.jpg, frame_000002.jpg, etc.
  ********************************************************************/
 
 #include "config.h"
