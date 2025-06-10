@@ -178,7 +178,12 @@ static void startWebServer() {
       if (f.isDirectory()) {
         html += "<li><a href=\"/?dir=" + name + "\">" + name + "/</a></li>";
       } else {
-        html += "<li><a href=\"/f?name=" + name + "\">";
+        // Include the full path in the file link
+        String fullPath = dirPath;
+        if (!fullPath.endsWith("/"))
+          fullPath += "/";
+        fullPath += name;
+        html += "<li><a href=\"/f?name=" + fullPath + "\">";
         html += name + " (" + String(f.size()) + " B)</a></li>";
       }
       f.close();
@@ -356,7 +361,8 @@ void loop() {
     delay(10);
   }
 
-  LOG_PRINTF("[Sequence] Saved %d JPEGs to %s (frame_000001.jpg to frame_%06d.jpg)\n",
-             frameCount, frameDir.c_str(), frameCount);
+  LOG_PRINTF(
+      "[Sequence] Saved %d JPEGs to %s (frame_000001.jpg to frame_%06d.jpg)\n",
+      frameCount, frameDir.c_str(), frameCount);
   videoRecorded = true;
 }
