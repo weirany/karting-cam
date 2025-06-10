@@ -149,16 +149,41 @@ static bool initCamera() {
 static void startWebServer() {
   /* / -> HTML directory listing  */
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
+    // Optional query parameter ?dir=/subdir to view a specific folder
+    String dirPath = "/";
+    if (req->hasParam("dir")) {
+      dirPath = req->getParam("dir")->value();
+      if (!dirPath.startsWith("/"))
+        dirPath = "/" + dirPath;
+    }
+
+    File dir = SD_MMC.open(dirPath);
+    if (!dir) {
+      req->send(404, "text/plain", "Directory not found");
+      return;
+    }
+
     String html = "<h2>Captured JPEGs</h2><ul>";
-    File dir = SD_MMC.open("/");
+
+    // Show an entry for parent directory when not at root
+    if (dirPath != "/") {
+      String parent = dirPath.substring(0, dirPath.lastIndexOf('/'));
+      if (parent.length() == 0)
+        parent = "/";
+      html += "<li><a href=\"/?dir=" + parent + "\">[..]</a></li>";
+    }
+
     while (File f = dir.openNextFile()) {
-      if (!f.isDirectory()) {
-        String name = String(f.name());
+      String name = String(f.name());
+      if (f.isDirectory()) {
+        html += "<li><a href=\"/?dir=" + name + "\">" + name + "/</a></li>";
+      } else {
         html += "<li><a href=\"/f?name=" + name + "\">";
         html += name + " (" + String(f.size()) + " B)</a></li>";
       }
       f.close();
     }
+
     html += "</ul>";
     req->send(200, "text/html", html);
   });

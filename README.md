@@ -35,6 +35,6 @@ Upload the `karting-cam.ino` file to your ESP32-CAM using the Arduino IDE or Pla
 - Captures 5 seconds of video as individual JPEG frames on boot
 - Saves frames in a timestamped folder (e.g. `/20240101_120000/`) as
   `frame_000001.jpg`, `frame_000002.jpg`, etc. on the SD card
-- Web interface to view and download files
+- Web interface to browse directories and download files
 - Can operate as WiFi Access Point or connect to existing network
 - Automatically syncs the on-board RTC with NTP when WiFi has internet access
