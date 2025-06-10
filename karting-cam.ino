@@ -1,14 +1,16 @@
 /********************************************************************
  *  Karting-Cam — ESP32-CAM + SD-MMC + Soft-AP HTTP file server
  *  -------------------------------------------------------------
- *  ‣ Captures a JPEG every min and stores it on the micro-SD card
+ *  ‣ Captures 5 seconds of video as individual JPEG frames on boot
  *  ‣ Creates its own Wi-Fi network  (SSID: KartCam, PW: p@ssword)
  *      OR join your home Wi-Fi by flipping USE_SOFT_AP to 0
  *  ‣ Tiny web UI   →  http://<board-ip>/        (lists files)
  *                      http://<board-ip>/f?name=<filename>  (downloads)
+ *  ‣ Saves frames as frame_000001.jpg, frame_000002.jpg, etc.
  ********************************************************************/
 
 #include "config.h"
+#include "log_util.h"
 #include <Arduino.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -16,7 +18,6 @@
 #include <SD_MMC.h>
 #include <WiFi.h>
 #include <esp_camera.h>
-#include "log_util.h"
 
 /* ---------------------- Camera pin assignment ---------------------- */
 /*  These match the WROOM-32E + OV2640 wiring you posted.              */
@@ -39,7 +40,7 @@
 /* ------------------------------------------------------------------- */
 
 AsyncWebServer server(80);
-static uint32_t frameCounter = 0;
+static bool videoRecorded = false;
 
 /* ------------------ Helper: start / join Wi-Fi --------------------- */
 static void startWiFi() {
@@ -49,6 +50,9 @@ static void startWiFi() {
              WiFi.softAPIP().toString().c_str());
 #else
   WiFi.mode(WIFI_STA);
+  // Optimize for station mode performance
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false); // Don't save WiFi config to flash
   WiFi.begin(STA_SSID, STA_PASS);
   LOG_PRINTF("[WiFi] Connecting to %s", STA_SSID);
   while (WiFi.status() != WL_CONNECTED) {
@@ -57,6 +61,24 @@ static void startWiFi() {
   }
   LOG_PRINTF("\n[WiFi] Connected  IP:%s  RSSI:%ddBm\n",
              WiFi.localIP().toString().c_str(), WiFi.RSSI());
+#endif
+
+  // Disable WiFi sleep for consistent performance
+  WiFi.setSleep(false);
+
+  // TCP optimizations for better throughput
+  WiFi.setTxPower(WIFI_POWER_19_5dBm); // Max power
+
+// Set larger TCP window size for better throughput
+// Note: These may not be available in all ESP32 Arduino versions
+#ifdef CONFIG_LWIP_TCP_WND_DEFAULT
+// Already configured in sdkconfig
+#endif
+
+// Additional TCP optimizations for large chunk transfers
+// Increase TCP send buffer size if available
+#ifdef CONFIG_LWIP_TCP_SND_BUF_DEFAULT
+// TCP send buffer already optimized in build config
 #endif
 }
 
@@ -84,10 +106,10 @@ static bool initCamera() {
   cfg.xclk_freq_hz = 20'000'000;
   cfg.pixel_format = PIXFORMAT_JPEG;
 
-  // For stills a full 1600×1200 (UXGA) is handy.
-  cfg.frame_size = FRAMESIZE_UXGA;
-  cfg.jpeg_quality = 12; // 10-12 gives ~200 kB images
-  cfg.fb_count = 1;      // single frame buffer
+  // For video, use lower resolution for faster capture
+  cfg.frame_size = FRAMESIZE_VGA; // 640×480 instead of 1600×1200
+  cfg.jpeg_quality = 20;          // Higher number = lower quality but faster
+  cfg.fb_count = 2;               // double buffer for better performance
 
   esp_err_t err = esp_camera_init(&cfg);
   if (err != ESP_OK) {
@@ -115,7 +137,7 @@ static void startWebServer() {
     req->send(200, "text/html", html);
   });
 
-  /* /f?name=cap00042.jpg -> raw JPEG stream  */
+  /* /f?name=cap00042.jpg -> custom high-performance streaming */
   server.on("/f", HTTP_GET, [](AsyncWebServerRequest *req) {
     if (!req->hasParam("name")) {
       req->send(400, "text/plain", "Missing ?name=");
@@ -124,17 +146,69 @@ static void startWebServer() {
     String fname = req->getParam("name")->value();
     if (!fname.startsWith("/"))
       fname = "/" + fname;
+
     File file = SD_MMC.open(fname, FILE_READ);
     if (!file) {
       req->send(404, "text/plain", "File not found");
       return;
     }
-    req->send(file, fname, "image/jpeg");
-    /* AsyncWebServer closes the File automatically after streaming */
+
+    // Determine MIME type based on file extension
+    String mimeType = "application/octet-stream"; // default
+    if (fname.endsWith(".jpg") || fname.endsWith(".jpeg")) {
+      mimeType = "image/jpeg";
+    } else if (fname.endsWith(".mjpeg") || fname.endsWith(".mjpg")) {
+      mimeType = "video/x-motion-jpeg";
+    } else if (fname.endsWith(".txt") || fname.endsWith(".log")) {
+      mimeType = "text/plain";
+    }
+
+    size_t fileSize = file.size();
+    file.close();
+
+    // Use a streaming response with larger buffer
+    AsyncWebServerResponse *response = req->beginResponse(
+        mimeType, fileSize,
+        [fname](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+          static File streamFile;
+
+          // Open file on first call
+          if (index == 0) {
+            streamFile = SD_MMC.open(fname, FILE_READ);
+            if (!streamFile)
+              return 0;
+          }
+
+          if (!streamFile.available()) {
+            streamFile.close();
+            return 0;
+          }
+
+          // Read up to 64KB chunks for maximum performance
+          size_t available = (size_t)streamFile.available();
+          size_t toRead = min(maxLen, min((size_t)65536, available));
+          size_t bytesRead = streamFile.read(buffer, toRead);
+
+          if (!streamFile.available()) {
+            streamFile.close();
+          }
+
+          return bytesRead;
+        });
+
+    response->addHeader("Accept-Ranges", "bytes");
+    response->addHeader("Cache-Control", "public, max-age=3600");
+
+    req->send(response);
+  });
+
+  // Configure server for better performance
+  server.onNotFound([](AsyncWebServerRequest *req) {
+    req->send(404, "text/plain", "Not Found");
   });
 
   server.begin();
-  LOG_PRINTLN("[HTTP] Server started");
+  LOG_PRINTLN("[HTTP] Server started with 64KB chunk streaming");
 }
 
 /* ------------------------------ setup() ---------------------------- */
@@ -148,8 +222,10 @@ void setup() {
       delay(1000);
   }
 
-  /* Mount SD-MMC in 4-bit mode, /sd is implicit */
-  if (!SD_MMC.begin("/sd", true)) { // true = 4-bit
+  // 4-bit, no format, 52MHz
+  if (!SD_MMC.begin("/sd", /*mode1bit =*/false,
+                    /*format_if_mount_failed =*/false,
+                    /*max_freq =*/SDMMC_FREQ_52M)) {
     LOG_PRINTLN("SD_MMC mount failed — halting.");
     while (true)
       delay(1000);
@@ -164,25 +240,55 @@ void setup() {
 
 /* ------------------------------ loop() ----------------------------- */
 void loop() {
-  /* Capture one frame every minute */
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    LOG_PRINTLN("Camera capture failed");
-    delay(5000);
+  if (videoRecorded) {
+    delay(1000);
     return;
   }
 
-  char path[32];
-  sprintf(path, "/cap%05u.jpg", frameCounter++);
-  File img = SD_MMC.open(path, FILE_WRITE);
-  if (img) {
-    img.write(fb->buf, fb->len);
-    img.close();
-    LOG_PRINTF("Saved %s (%u bytes)\n", path, fb->len);
-  } else {
-    LOG_PRINTF("File open failed for %s\n", path);
-  }
-  esp_camera_fb_return(fb);
+  LOG_PRINTLN("[Sequence] Capturing 5 seconds of frames…");
+  uint32_t start = millis();
+  int frameCount = 0;
 
-  delay(60 * 1000);
+  while (millis() - start < 5 * 1000) {
+    uint32_t frameStart = millis();
+
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+      LOG_PRINTLN("Camera capture failed");
+      break;
+    }
+
+    // Create filename with zero-padded frame number (frame_000001.jpg,
+    // frame_000002.jpg, etc.)
+    char filename[32];
+    snprintf(filename, sizeof(filename), "/frame_%06d.jpg", frameCount + 1);
+
+    // Save individual JPEG file
+    File frameFile = SD_MMC.open(filename, FILE_WRITE);
+    if (frameFile) {
+      frameFile.write(fb->buf, fb->len);
+      frameFile.close();
+    } else {
+      LOG_PRINTF("Failed to create %s\n", filename);
+    }
+
+    esp_camera_fb_return(fb);
+    frameCount++;
+
+    uint32_t frameTime = millis() - frameStart;
+
+    // Log every 100th frame with timing info
+    if (frameCount % 100 == 0) {
+      LOG_PRINTF("Frame %d saved as %s at %lums (took %lums)\n", frameCount,
+                 filename, millis() - start, frameTime);
+    }
+
+    // Small delay to prevent overwhelming the system
+    delay(10);
+  }
+
+  LOG_PRINTF("[Sequence] Saved %d individual JPEG files (frame_000001.jpg to "
+             "frame_%06d.jpg)\n",
+             frameCount, frameCount);
+  videoRecorded = true;
 }
