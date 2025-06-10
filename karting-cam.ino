@@ -6,7 +6,8 @@
  *      OR join your home Wi-Fi by flipping USE_SOFT_AP to 0
  *  ‣ Tiny web UI   →  http://<board-ip>/        (lists files)
  *                      http://<board-ip>/f?name=<filename>  (downloads)
- *  ‣ Saves frames as frame_000001.jpg, frame_000002.jpg, etc.
+ *  ‣ Saves frames inside a timestamped folder as frame_000001.jpg,
+ *      frame_000002.jpg, etc.
  ********************************************************************/
 
 #include "config.h"
@@ -42,6 +43,7 @@
 
 AsyncWebServer server(80);
 static bool videoRecorded = false;
+static String frameDir = "/"; // Directory where frames will be saved
 
 /* ------------------ Helper: start / join Wi-Fi --------------------- */
 static void startWiFi() {
@@ -147,16 +149,46 @@ static bool initCamera() {
 static void startWebServer() {
   /* / -> HTML directory listing  */
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
+    // Optional query parameter ?dir=/subdir to view a specific folder
+    String dirPath = "/";
+    if (req->hasParam("dir")) {
+      dirPath = req->getParam("dir")->value();
+      if (!dirPath.startsWith("/"))
+        dirPath = "/" + dirPath;
+    }
+
+    File dir = SD_MMC.open(dirPath);
+    if (!dir) {
+      req->send(404, "text/plain", "Directory not found");
+      return;
+    }
+
     String html = "<h2>Captured JPEGs</h2><ul>";
-    File dir = SD_MMC.open("/");
+
+    // Show an entry for parent directory when not at root
+    if (dirPath != "/") {
+      String parent = dirPath.substring(0, dirPath.lastIndexOf('/'));
+      if (parent.length() == 0)
+        parent = "/";
+      html += "<li><a href=\"/?dir=" + parent + "\">[..]</a></li>";
+    }
+
     while (File f = dir.openNextFile()) {
-      if (!f.isDirectory()) {
-        String name = String(f.name());
-        html += "<li><a href=\"/f?name=" + name + "\">";
+      String name = String(f.name());
+      if (f.isDirectory()) {
+        html += "<li><a href=\"/?dir=" + name + "\">" + name + "/</a></li>";
+      } else {
+        // Include the full path in the file link
+        String fullPath = dirPath;
+        if (!fullPath.endsWith("/"))
+          fullPath += "/";
+        fullPath += name;
+        html += "<li><a href=\"/f?name=" + fullPath + "\">";
         html += name + " (" + String(f.size()) + " B)</a></li>";
       }
       f.close();
     }
+
     html += "</ul>";
     req->send(200, "text/html", html);
   });
@@ -260,6 +292,22 @@ void setup() {
 
   startWiFi();
   syncClock();
+
+  // Create a directory named with the current timestamp
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo, 10000)) {
+    char tsDir[32];
+    strftime(tsDir, sizeof(tsDir), "/%Y%m%d_%H%M%S", &timeinfo);
+    if (SD_MMC.mkdir(tsDir)) {
+      frameDir = String(tsDir) + "/";
+    }
+  }
+  if (frameDir == "/" && !SD_MMC.exists(frameDir.c_str())) {
+    // Fallback directory if time couldn't be obtained
+    frameDir = "/frames/";
+    SD_MMC.mkdir("/frames");
+  }
+  LOG_PRINTF("[Setup] Frames will be saved under %s\n", frameDir.c_str());
   startWebServer();
 }
 
@@ -285,8 +333,9 @@ void loop() {
 
     // Create filename with zero-padded frame number (frame_000001.jpg,
     // frame_000002.jpg, etc.)
-    char filename[32];
-    snprintf(filename, sizeof(filename), "/frame_%06d.jpg", frameCount + 1);
+    char filename[64];
+    snprintf(filename, sizeof(filename), "%sframe_%06d.jpg", frameDir.c_str(),
+             frameCount + 1);
 
     // Save individual JPEG file
     File frameFile = SD_MMC.open(filename, FILE_WRITE);
@@ -312,8 +361,8 @@ void loop() {
     delay(10);
   }
 
-  LOG_PRINTF("[Sequence] Saved %d individual JPEG files (frame_000001.jpg to "
-             "frame_%06d.jpg)\n",
-             frameCount, frameCount);
+  LOG_PRINTF(
+      "[Sequence] Saved %d JPEGs to %s (frame_000001.jpg to frame_%06d.jpg)\n",
+      frameCount, frameDir.c_str(), frameCount);
   videoRecorded = true;
 }
