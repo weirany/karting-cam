@@ -90,7 +90,13 @@ static void syncClock() {
     return;
   }
 
-  configTime(TZ_INFO, NTP_SERVER1, NTP_SERVER2);
+  // Configure time with GMT offset and daylight saving offset
+  // For UTC: gmtOffset_sec = 0, daylightOffset_sec = 0
+  configTime(0, 0, NTP_SERVER1, NTP_SERVER2);
+
+  // Set timezone using the POSIX string
+  setenv("TZ", TZ_INFO, 1);
+  tzset();
 
   struct tm timeinfo;
   if (getLocalTime(&timeinfo, 10000)) {
