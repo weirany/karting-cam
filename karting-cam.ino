@@ -105,10 +105,10 @@ static bool initCamera() {
   cfg.xclk_freq_hz = 20'000'000;
   cfg.pixel_format = PIXFORMAT_JPEG;
 
-  // For stills a full 1600×1200 (UXGA) is handy.
-  cfg.frame_size = FRAMESIZE_UXGA;
-  cfg.jpeg_quality = 12; // 10-12 gives ~200 kB images
-  cfg.fb_count = 1;      // single frame buffer
+  // For video, use lower resolution for faster capture
+  cfg.frame_size = FRAMESIZE_VGA; // 640×480 instead of 1600×1200
+  cfg.jpeg_quality = 20;          // Higher number = lower quality but faster
+  cfg.fb_count = 2;               // double buffer for better performance
 
   esp_err_t err = esp_camera_init(&cfg);
   if (err != ESP_OK) {
@@ -244,26 +244,50 @@ void loop() {
     return;
   }
 
-  File vid = SD_MMC.open("/video.mjpeg", FILE_WRITE);
-  if (!vid) {
-    LOG_PRINTLN("Video file open failed");
-    videoRecorded = true;
-    return;
-  }
-
-  LOG_PRINTLN("[Video] Recording 10 seconds …");
+  LOG_PRINTLN("[Sequence] Capturing 5 seconds of frames…");
   uint32_t start = millis();
-  while (millis() - start < 10 * 1000) {
+  int frameCount = 0;
+
+  while (millis() - start < 5 * 1000) {
+    uint32_t frameStart = millis();
+
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
       LOG_PRINTLN("Camera capture failed");
       break;
     }
-    vid.write(fb->buf, fb->len);
+
+    // Create filename with zero-padded frame number (frame_000001.jpg,
+    // frame_000002.jpg, etc.)
+    char filename[32];
+    snprintf(filename, sizeof(filename), "/frame_%06d.jpg", frameCount + 1);
+
+    // Save individual JPEG file
+    File frameFile = SD_MMC.open(filename, FILE_WRITE);
+    if (frameFile) {
+      frameFile.write(fb->buf, fb->len);
+      frameFile.close();
+    } else {
+      LOG_PRINTF("Failed to create %s\n", filename);
+    }
+
     esp_camera_fb_return(fb);
-    delay(100); // ~10 FPS
+    frameCount++;
+
+    uint32_t frameTime = millis() - frameStart;
+
+    // Log every 100th frame with timing info
+    if (frameCount % 100 == 0) {
+      LOG_PRINTF("Frame %d saved as %s at %lums (took %lums)\n", frameCount,
+                 filename, millis() - start, frameTime);
+    }
+
+    // Small delay to prevent overwhelming the system
+    delay(10);
   }
-  vid.close();
-  LOG_PRINTLN("[Video] Saved /video.mjpeg");
+
+  LOG_PRINTF("[Sequence] Saved %d individual JPEG files (frame_000001.jpg to "
+             "frame_%06d.jpg)\n",
+             frameCount, frameCount);
   videoRecorded = true;
 }
