@@ -18,6 +18,7 @@
 #include <SD_MMC.h>
 #include <WiFi.h>
 #include <esp_camera.h>
+#include <time.h>
 
 /* ---------------------- Camera pin assignment ---------------------- */
 /*  These match the WROOM-32E + OV2640 wiring you posted.              */
@@ -80,6 +81,29 @@ static void startWiFi() {
 #ifdef CONFIG_LWIP_TCP_SND_BUF_DEFAULT
 // TCP send buffer already optimized in build config
 #endif
+}
+
+/* --------------- Helper: synchronize time via SNTP ----------------- */
+static void syncClock() {
+  if (WiFi.status() != WL_CONNECTED) {
+    LOG_PRINTLN("[SNTP] Wi-Fi not connected, skipping time sync");
+    return;
+  }
+
+  // Configure time with GMT offset and daylight saving offset
+  // For UTC: gmtOffset_sec = 0, daylightOffset_sec = 0
+  configTime(0, 0, NTP_SERVER1, NTP_SERVER2);
+
+  // Set timezone using the POSIX string
+  setenv("TZ", TZ_INFO, 1);
+  tzset();
+
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo, 10000)) {
+    LOG_PRINTF("[SNTP] Time synchronized: %s", asctime(&timeinfo));
+  } else {
+    LOG_PRINTLN("[SNTP] Failed to obtain time");
+  }
 }
 
 /* ------------------ Helper: configure the camera ------------------- */
@@ -235,6 +259,7 @@ void setup() {
   logInit();
 
   startWiFi();
+  syncClock();
   startWebServer();
 }
 

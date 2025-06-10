@@ -12,4 +12,12 @@ static const char *STA_SSID = "YOUR_WIFI_SSID_HERE";
 static const char *STA_PASS = "YOUR_WIFI_PASSWORD_HERE";
 #endif
 
-#endif // CONFIG_H 
+/* ----------------------------- Time Sync ----------------------------- */
+// POSIX TZ string (handles DST automatically). Replace with your zone.
+// Example: "EST5EDT,M3.2.0/2,M11.1.0/2" for US Eastern time
+static const char *TZ_INFO = "UTC0";
+
+static const char *NTP_SERVER1 = "pool.ntp.org";
+static const char *NTP_SERVER2 = "time.nist.gov";
+
+#endif // CONFIG_H
